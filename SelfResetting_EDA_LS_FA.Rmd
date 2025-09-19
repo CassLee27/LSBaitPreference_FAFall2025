@@ -1,0 +1,241 @@
+---
+title: "SelfResetting_EDA_LS_FA"
+author: "Cass Lee"
+date: "2025-09-15"
+output: pdf_document
+---
+
+! For best results, run these code chunks sequentially in RStudio rather than creating a knitted document.
+
+## Preliminary Set Up
+
+```{r import libraries}
+# import useful libraries
+library(tidyverse)
+library(mosaic)
+library(ggformula)
+library(dplyr)
+library(lme4)
+library(effects)
+```
+
+```{r import data}
+# set import file path
+path <- '~/Desktop/ENVR356/LS_FA/full_data.csv'
+# import full data set
+all_data <- read_csv(file = path)
+```
+
+## EDA and Data Wrangling
+
+```{r problems}
+# address initial problems when loading csv
+# image links trying to translate to logical
+# remove the image column
+neat_data <- select(all_data, -Images)
+glimpse(data)
+```
+
+```{r wrangling}
+# rename columns to work better for analysis
+colnames(neat_data) <- c("Line", "TrapID", "Code", "TrapType",
+                         "TrapSubType", "Tags", "Latitude",
+                         "Longitude","Easting","Northing","EntryID",
+                         "Date", "Status", "InitialBait", "Rebaited",
+                         "BaitType", "BaitDetails", "RecordedBy",
+                         "Strikes", "SpeciesCaught", "Sex",
+                         "Maturity","TrapCondition", "Notes")
+glimpse(neat_data)
+# make sure data looks good
+  # TODO vaguely weird, maybe come back to this
+inspect(data1)
+```
+
+```{r}
+# EDA for trap type, bait type
+tally(~TrapType, data=neat_data)
+tally(~BaitType, data=neat_data)
+```
+
+```{r}
+# single kill
+# filter to just single kill traps that have mayo or pb as bait
+#analysis_data_a <- subset(data1_a, grepl("MAYO", toupper(BaitType)) | grepl("PEANUT BUTTER", toupper(BaitType))) |>
+#  subset(!(grepl("AT220", TrapType) | grepl("Sentinel", TrapType) | grepl("Supervisor Max", TrapType)))
+
+# how to distinguish single kill traps
+  # 27 unspecified
+  # single: cage trap, D-Rat, DOC 200, DOC 250, leg hold trap, rat trap, SA cat, Tāwhiti - Smart Cage, trapinator
+    # cage trap, leg hold trap, Tāwhiti - Smart Cage is live capture
+    # rat trap resetting type isn't specified but we can probably pretty safely assume it's single trap per set
+  # self-resetting: AT220, sentinel, supervisor max
+    # sentinel, supervisor max assumed to not be by looking up quickly but actually recorded as having multiple strikes sometimes
+# sentinel trap is specifically for possums, supposed to stop rats from getting bait
+```
+
+```{r}
+#tally(~BaitType, data=analysis_data_a)
+# 600 odd just mayo before filtering by just single kill
+```
+
+```{r}
+# look at the self-resetting trap data to see if it can be made to compare to single kill
+resetting <- subset(neat_data, grepl("MAYO", toupper(BaitType)) | grepl("PEANUT BUTTER", toupper(BaitType))) |>
+  subset(grepl("AT220", TrapType) | grepl("Sentinel", TrapType) | grepl("Supervisor Max", TrapType))
+tally(~BaitType, data=resetting)
+resetting[resetting$BaitType=="Mayo",]
+  # 680ish plain mayo, 630ish plain pb for self-resetting
+```
+
+```{r}
+nonresetting <- subset(neat_data, grepl("MAYO", toupper(BaitType)) | grepl("PEANUT BUTTER", toupper(BaitType))) |>
+  subset(!(grepl("AT220", TrapType) | grepl("Sentinel", TrapType) | grepl("Supervisor Max", TrapType)))
+```
+
+```{r}
+# servicing interval for self-resetting traps
+# function of choice for the task
+avg_interval <- function(id, dates){
+  #print(id)
+  #print(dates)
+  total_interval <- 0
+  for (i in 1:(length(dates)-1)){
+    total_interval <- total_interval + difftime(dates[i+1],dates[i],units="days")
+  }
+  #print(total_interval/(length(dates)-1))
+  if (length(dates) <= 1){
+    return(as.difftime(0,units="days"))
+  }
+  else{return(total_interval/(length(dates)-1))}
+}
+
+times_resetting <- resetting |> group_by(TrapID) |> summarize(AvgInterval = avg_interval(TrapID,Date)[1], n = n())
+times_nonresetting <- nonresetting |> group_by(TrapID) |> summarize(AvgInterval = avg_interval(TrapID,Date)[1], n = n())
+```
+
+```{r}
+# servicing interval for self-resetting traps
+# less efficient
+intervals <- function(id, dates){
+  #print(id)
+  #print(dates)
+  intervals <- c()
+  for (i in 1:(length(dates)-1)){
+    intervals <- c(intervals, difftime(dates[i+1],dates[i],units="days"))
+  }
+  return(intervals)
+}
+
+# different formulations for the summarize query
+#times2 <- resetting |> group_by(TrapID) |> summarize(AvgInterval = avg_interval(TrapID,Date), MeanInterval = mean(intervals(TrapID,Date)))
+#times2 <- resetting |> group_by(TrapID) |> summarize(AvgInterval = avg_interval(TrapID,Date), MeanInterval = mean(intervals(TrapID,Date),na.rm=FALSE))
+
+#times <- resetting |> group_by(TrapID) |> summarize(AvgInterval = avg_interval(TrapID,Date)[1])
+
+#times3 <- resetting |> group_by(TrapID) |> summarize(MeanInterval = mean(intervals(TrapID,Date)))
+
+# tests for the two functions
+#print(avg_interval(c(as.POSIXct("2022-02-26 14:25:00"),as.POSIXct("2022-02-27 10:09:00"),as.POSIXct("2022-02-28 10:09:00"))))
+#print(intervals(c(as.POSIXct("2022-02-26 14:25:00"),as.POSIXct("2022-02-27 10:09:00"),as.POSIXct("2022-02-28 10:09:00"))))
+```
+
+```{r}
+# visualize self resetting interval
+favstats(~AvgInterval,data=times_resetting)
+gf_histogram(~AvgInterval,data=times_resetting) |> gf_boxplot()
+```
+```{r}
+# visualize non self resetting interval
+favstats(~AvgInterval,data=times_nonresetting)
+gf_histogram(~AvgInterval,data=times_nonresetting) |> gf_boxplot()
+```
+
+The average servicing interval between not resetting and self resetting is meaningfully different 
+```{r}
+# non parametric two sample mean comparison
+wilcox.test(as.numeric(times_nonresetting$AvgInterval),as.numeric(times_resetting$AvgInterval))
+  # yup it's different, p < 0.001
+```
+
+```{r}
+# how many times each trap is reset
+favstats(~n, data=times)
+gf_histogram(~n,data=times) |> gf_boxplot()
+```
+
+```{r}
+# servicing interval for self-resetting traps
+  # scatter plot with line drawn through
+  # x axis is time, strikes is y axis
+  # entryid is series
+# make more legible by sampling only a few
+small_resetting <- resetting |> subset(TrapID %in% sample(unique(TrapID),10))
+gf_line(Strikes~Date, color=~as.factor(TrapID),data=small_resetting) |> gf_point()
+```
+
+So the solution is to add service interval as a variable to the mixed model (and maybe self resetting? probably not), make the number of strikes just be a boolean of strike or not, and then use all trap types baited with just mayo or just pb
+
+Can also compare just the self resetting with pb and mayo
+
+```{r}
+resetting_analysis_data <- subset(resetting, BaitType =="Mayo" | BaitType=="Peanut butter")
+```
+
+```{r}
+# look at the sample size for just pb and mayo single baits
+tally(~BaitType, data=resetting_analysis_data)
+  # 680 Mayo, 653 Peanut butter
+```
+
+```{r}
+trapnz_model <- lmer(Strikes ~ BaitType + (1 | Date), data=resetting_analysis_data)
+```
+
+```{r}
+# stats for model
+summary(trapnz_model)
+
+#model2 <- lm(Strikes ~ BaitType +Date, data=resetting_analysis_data)
+#summary(model2)
+  # p value for bait type is very low
+
+```
+
+```{r}
+# graph for model
+# TODO look up how to graph lmer
+date_effect <- as.data.frame(effect(term="BaitType", mod=trapnz_model))
+
+#gf_point(Strikes~BaitType,data=resetting_analysis_data)
+
+gf_point(Strikes~Date,color=~BaitType,shape=~BaitType,data=resetting_analysis_data) |>
+  gf_lm() |>
+  gf_labs(color="Bait Type",shape="Bait Type") + scale_y_log10() + scale_color_manual(values = c("skyblue","darkorange"))
+
+#gf_point(Strikes~BaitType, data=resetting_analysis_data) |>
+#  gf_point(fit~BaitType, data=date_effect,color="red") |>
+#  gf_line(fit~BaitType, data=date_effect,color="red") |>
+#  gf_ribbon(lower + upper ~ BaitType, data=date_effect, alpha=0.3,fill="red") |>
+#  gf_labs()
+```
+
+```{r}
+# mutate to make a sprung or not binary variable
+sprung_analysis_data <- mutate(resetting_analysis_data, Sprung = Strikes>0)
+```
+
+```{r}
+# logistic regression for the sprung analysis data
+m <- glm(Sprung~Date+BaitType, sprung_analysis_data,family="binomial")
+predict(m)
+plot(m)
+```
+
+```{r}
+# plot logistic regression
+gf_point(Sprung~Date,color=~BaitType,shape=~BaitType,data=sprung_analysis_data) |>
+  gf_smooth(method ="glm", method.args = list(family ="binomial"),se=FALSE) |>
+  gf_labs(color="Bait Type",shape="Bait Type") + scale_color_manual(values = c("skyblue","darkorange"))
+  # logistic regression claims not to converge...
+```
+
