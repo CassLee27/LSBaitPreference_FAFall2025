@@ -22,7 +22,7 @@ library(effects)
 
 ```{r import data}
 # set import file path
-path_m <- '~/Desktop/ENVR356/LS_FA/MouseDataDraft.tsv'
+path_m <- '~/Desktop/ENVR356/LS_FA/MouseData.tsv'
 # import full data set
 all_data_m <- read_tsv(file = path_m,col_types = "nnccntcncccccc")
   # skip the two header rows
@@ -66,12 +66,34 @@ analysis_data_m <- all_data_m |>
 ```
 
 ```{r}
+# automatically fill in the left tube treatment based on period and site
+treatments <- data.frame(Period=rep(1:3,each=10),Site=rep(1:10,3), LeftTubeTreatment=c("M","C","M","M","C","P","M","C","P","P",
+                    "C","M","P","P","M","P","P","M","C","C",
+                    "C","P","P","M","P","C","P","P","C","M"))
+
+analysis_data_m <- left_join(analysis_data_m,treatments)
+
+```
+
+```{r}
+# try to group clips by same date and time within 5 minutes
+grouped_analysis_data_m <- analysis_data_m |> 
+  #group_by() |> 
+  mutate(difft = abs(as.numeric(difftime(Time, lag(Time, default = first(Time)),units = 'mins')))) |>
+  #mutate(diffd = abs(as.numeric(difftime(date, lag(date, default = first(date)),
+               #units = 'days')))) %>%
+   group_by(grp = cumsum(difft > 5), .add = TRUE) |> 
+  summarize(Site=Site[1],Camera=Camera[1], Month=Month[1], Day=Day[1], Time=Time[1], LeftTubeTreatment=LeftTubeTreatment[1],
+            LastDate = tail(Date,n=1), Date=Date[1], Period=Period[1], ServiceInterval=ServiceInterval[1], MaxMice = max(NumMice))
+```
+
+```{r}
 # separate out the different mice
-analysis_data_m <- analysis_data_m |> separate_longer_delim(c(Left,Right,Majority),",") |>
+split_mice_data_m <- analysis_data_m |> separate_longer_delim(c(Left,Right,Majority),",") |>
   mutate(Left = as.numeric(Left), Right = as.numeric(Right))
 
 # get only the entries with multiple mice
-#multiple_mice <- analysis_data_m |> subset(NumMice > 1) 
+#\multiple_mice <- analysis_data_m |> subset(NumMice > 1) 
 #|>
   #mutate(MouseNum)
   # make extra rows so each mouse has own line
@@ -90,49 +112,227 @@ analysis_data_m <- analysis_data_m |> separate_longer_delim(c(Left,Right,Majorit
 ```
 
 ```{r}
-# automatically fill in the left tube treatment based on period and site
-treatments <- data.frame(Period=rep(1:3,each=10),Site=rep(1:10,3), LeftTubeTreatment=c("M","C","M","M","C","P","M","C","P","P",
-                    "C","M","P","P","M","P","P","M","C","C",
-                    "C","P","P","M","P","C","P","P","C","M"))
-
-analysis_data_m <- left_join(analysis_data_m,treatments)
-
-```
-
-```{r}
-analysis_data_m <- analysis_data_m |>
+split_mice_data_m <- split_mice_data_m |>
   mutate(FirstBait = case_when(Left=="1" ~ LeftTubeTreatment, # if the first tube was the left then record the left treatment
                         Right=="1" & LeftTubeTreatment == "M" ~ "P", # if the first tube was the right and the left tube had mayo then record peanut butter as the first bait
                         Right=="1" & LeftTubeTreatment == "P" ~ "M", # if the first tube was the right and the left tube had peanut butter then record mayo as the first bait
                         Right=="1" & LeftTubeTreatment == "C" ~ "C", # if the first tube was the right and the left tube was control then record control as the first bait
-                        .default = NA)) # otherwise, no first bait
+                        .default = "N")) # otherwise, no first bait
+```
+
+```{r}
+mouse_first_int <- data.frame(grp=numeric(),Mouse=numeric(),FirstInt=character())
+#mouse_ints <- data.frame(Mouse=numeric(),LInts=char(),RInts=char())
+
+# for every group
+for (g in 0:max(grouped_analysis_data_m$grp)){
+  grp_start_date <- grouped_analysis_data_m[grouped_analysis_data_m$grp==g,"Date"]
+  grp_start_date <- grp_start_date[[1]]
+  # select all videos within the group
+  grp_vids <- subset(split_mice_data_m,Date >= grp_start_date & Date < grp_start_date+5)
+  # find the number of mice in the group
+  grp_num_mice <- max(grp_vids$NumMice)
+  # for each mouse in the group, find their first interaction and put it into the mouse_first_int table
+  for (i in 1:grp_num_mice){
+    # select all left interactions
+    # select all right interactions
+    mouse_ints <- split_mice_data_m |> group_by(FileName) |> summarise(LInts = Left[i], RInts = Right[i], FirstBait = FirstBait[i])
+    # find first interaction and put in table
+      # group by filename and get the ith value for each filename?
+      # then which 
+    FirstInt <- "N"
+    il <- which(mouse_ints$LInts==1)[1]
+    ir <- which(mouse_ints$RInts==1)[1]
+    if (il > ir){
+      FirstInt = mouse_ints$FirstBait[il]
+    } else if (ir > il){
+      FirstInt = mouse_ints$FirstBait[ir]
+    }
+    mouse_first_int <- mouse_first_int |> append_rows(grp=g,Mouse=i,FirstInt=FirstInt)
+  }
+}
+```
+
+```{r}
+# test parts of this horrifying function
+
+mouse_first_int <- data.frame(grp=numeric(),Mouse=numeric(),FirstInt=character())
+#mouse_ints <- data.frame(Mouse=numeric(),LInts=char(),RInts=char())
+
+# for every group
+for (g in 0:max(grouped_analysis_data_m$grp)){
+  grp_start_date <-
+    subset(grouped_analysis_data_m, grp==g)$Date
+  grp_end_date <-
+    subset(grouped_analysis_data_m, grp==g)$LastDate
+  grp_site <-
+    subset(grouped_analysis_data_m, grp==g)$Site
+  # select all videos within the group
+  grp_vids <- subset(split_mice_data_m,Site == grp_site & Date >= grp_start_date & Date <= grp_end_date)
+  # find the number of mice in the group
+  grp_num_mice <- max(grp_vids$NumMice)
+  # for each mouse in the group, find their first interaction and put it into the mouse_first_int table
+  for (i in 1:grp_num_mice){
+    # select all left interactions
+    # select all right interactions
+    mouse_ints <- grp_vids |> group_by(FileName) |> summarise(LInts = Left[i], RInts = Right[i], FirstBait = FirstBait[i])
+    # find first interaction and put in table
+      # group by filename and get the ith value for each filename?
+      # then which 
+    FirstInt <- "N"
+    il <- which(mouse_ints$LInts==1)[1]
+    ir <- which(mouse_ints$RInts==1)[1]
+    if (is.na(il)){
+      il = length(grp_vids)+1
+    }
+    if(is.na(ir)){
+      ir = length(grp_vids)+1
+    }
+    if (il < ir){
+      FirstInt = mouse_ints$FirstBait[il]
+    } else if (ir < il){
+      FirstInt = mouse_ints$FirstBait[ir]
+    }
+    mouse_first_int <- mouse_first_int |> rows_append(data.frame(grp=g,Mouse=i,FirstInt=FirstInt))
+  }
+}
+```
+
+
+```{r}
+# make left and right columns work, has to be here because needs the mice to be separated --> have to use the unseparated 
+
+# TODO i have no idea how the left and right should work
+
+#compare every pair of elements for the two vectors
+#if left 
+
+firstbait_finder <- func(LInts,RInts,FirstBait){
+  il <- which(LInts==1)[1]
+  ir <- which(RInts==1)[1]
+  if (il == 0 & ir == 0){
+    return("N")
+  }
+  else if (il > ir){
+    return(FirstBait[il])
+  } else if (ir > il){
+    return(FirstBait[ir])
+  }
+}
+
+
+firstbait_finder <- func(LInts,RInts,FirstBait){
+  il <- which(LInts==1)[1]
+  ir <- which(RInts==1)[1]
+  if (il == 0 & ir == 0){
+    return("N")
+  }
+  else if (il > ir){
+    return(FirstBait[il])
+  } else if (ir > il){
+    return(FirstBait[ir])
+  }
+}
+
+which(1:10==1)
+
+grouped_analysis_data_m <- grouped_analysis_data_m |>
+  mutate(FirstBait = firstbait_finder(subset()))
+
+# return index of first occurrance of 1 in each list
+# get the first bait from whichever entry has the smaller index
+# if na then N
+
+#from the vector of baits, drop zeros, then if there is a 1 first it was the first bait of 
+
+
+   #group_by(grp = cumsum(diffd > 365), add = TRUE) %>%
+   #summarise(N = n_distinct(meds)) %>%
+   #group_by(ID) %>%
+   #summarise(N = max(N))
+
+```
+
+```{r}
+ultimate_mouse_data <- left_join(mouse_first_int,grouped_analysis_data_m)
+```
+
+# Mice and Time
+```{r}
+mice_by_date <- analysis_data_m |> group_by(Site, date=format(Date,"%Y-%m-%d")) |> summarise(SumNumMice = sum(NumMice), .groups="drop")
+
+gf_point(SumNumMice ~ as.POSIXct(date), data=mice_by_date) |> gf_smooth() |> gf_labs(x="Date", y="Mice per station") + theme_classic()
+#mouse_model <- lm(SumNumMice ~ as.POSIXct(date),data=mice_by_date)
+#summary(mouse_model)
 ```
 
 # First Interaction
 ```{r}
 #We also performed a similar analysis for mouse bait preference measured as first interaction choice.
+firstbait_data_m <- ultimate_mouse_data |> 
+  group_by(FirstInt) |>
+  summarize(n = n())
+
+chisq.test(firstbait_data_m$n, p=c(0.25,0.25,0.25,0.25))
+chisq.test(subset(firstbait_data_m, FirstInt=="M" | FirstInt=="P")$n, p=c(0.5,0.5))
+```
+```{r}
+# first bait
+gf_bar(~FirstInt,fill=~FirstInt,data=ultimate_mouse_data) |>
+  gf_labs(x = "First bait choice", y="Count", fill = "First bait choice") + scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2","grey50"), labels = c("Control", "Mayonnaise","Peanut butter", "None")) + scale_x_discrete(labels = c("Control", "Mayonnaise","Peanut butter", "None")) +
+  theme_classic()
 ```
 
 ```{r}
 # mixed model to predict first bait with the time since servicing
-glmer(FirstBait ~ ServiceInterval + (1 | Period),family="binomial",data=ungroup(analysis_data_m))
+firstbait_model_m <- glmer(as.factor(FirstInt) ~ ServiceInterval + (1 | Period)+(1|Site), data=subset(ultimate_mouse_data,FirstInt=="M" | FirstInt=="P"),family=binomial)
   # make a neither level for first bait
   # subset the analysis data to exclude things with no mice
 
-tally(~Period,data=analysis_data_m)
-tally(~FirstBait,data=analysis_data_m)
-tally(~FirstBait+Period,data=analysis_data_m)
-table(analysis_data_m[,c("FirstBait","Period")])
+summary(firstbait_model_m)
+
+firstbait_period_model_m <- glmer(as.factor(FirstInt) ~ ServiceInterval + Period+(1|Site), data=subset(ultimate_mouse_data,FirstInt=="M" | FirstInt=="P"),family=binomial)
+summary(firstbait_period_model_m)
+
+tally(~Period,data=ultimate_mouse_data)
+tally(~FirstInt,data=ultimate_mouse_data)
+tally(~FirstInt+Period,data=ultimate_mouse_data)
+table(ultimate_mouse_data[,c("FirstBait","Period")])
 # TODO this is really weird and something is wrong
 
 # We used a logistic mixed effects model with the same random effects and the fixed effect of time since service to predict which bait type would be chosen first.
 ```
 
 ```{r}
+# other statistical test to predict the first bait
+```
+
+```{r}
 # visualize first bait mixed model
 gf_boxplot(FirstBait ~ ServiceInterval, fill=~FirstBait,data=analysis_data_m) + scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2","grey")) + theme_classic()
-
+```
+```{r}
 gf_histogram(~ServiceInterval, fill=~FirstBait,data=analysis_data_m,position="identity") + scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2","grey")) + theme_classic()
+```
+```{r}
+gf_histogram(~ServiceInterval,color=~FirstInt, fill=~FirstInt,data=ultimate_mouse_data,position="stack")+ scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2","grey")) + scale_color_manual(values = c("springgreen3","dodgerblue","darkorange2","grey"))+ theme_classic()
+```
+
+```{r}
+baits <- c("Control", "Mayonnaise","Peanut butter","None")
+
+gf_histogram(~ServiceInterval, color=~FirstInt, fill=~FirstInt,data=ultimate_mouse_data) |> gf_labs(x="Days since station last serviced", y = "Count of bait stations") + scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2","grey")) + scale_color_manual(values = c("springgreen3","dodgerblue","darkorange2","grey")) + facet_grid(FirstInt~., labeller = labeller(FirstInt = baits)) + theme_classic()
+```
+
+```{r}
+gf_histogram(~ServiceInterval, color=~FirstInt, fill=~FirstInt,position = "identity",data=subset(ultimate_mouse_data,FirstInt =="M" |FirstInt =="P")) |> gf_labs(x="Days since station last serviced", y = "Count of bait stations") + scale_fill_manual(values = c("dodgerblue","darkorange2"),labels=c("Mayonnaise","Peanut butter")) + scale_color_manual(values = c("dodgerblue","darkorange2"),labels=c("Mayonnaise","Peanut butter")) + theme_classic()
+```
+
+```{r}
+gf_histogram(~ServiceInterval,color=~FirstInt, fill=~FirstInt,data=ultimate_mouse_data,position="identity",alpha=0.1)+ scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2","grey")) + scale_color_manual(values = c("springgreen3","dodgerblue","darkorange2","grey"))+ theme_classic()
+```
+```{r}
+gf_density(~ServiceInterval,color=~FirstInt, fill=~FirstInt,data=ultimate_mouse_data,position="identity") + scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2","grey")) + scale_color_manual(values = c("springgreen3","dodgerblue","darkorange2","grey"))+ theme_classic()
 ```
 
 # Proportion Interactions
@@ -208,13 +408,15 @@ summary(interaction_anova_m)
 #TODO need to make it so that there is variation within groups
 interaction_anova_m <- aov(Interaction ~ Treatment,data=interactions_m)
 summary(interaction_anova_m)
+
+TukeyHSD(interaction_anova_m)
 ```
 
 ```{r}
 # visualize the stuff
 gf_col(InteractionMean~Treatment,fill=~Treatment, data=interaction_stats) |>
   gf_labs(y = "Mean interactions per tube") + 
-  scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2","grey")) + theme_classic()
+  scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2","grey"), labels = c("Control", "Mayonnaise","Peanut butter","None")) + scale_x_discrete(labels = c("Control", "Mayonnaise","Peanut butter","None")) + theme_classic()
 #TODO add error bars somehow or smth
 
 
@@ -223,4 +425,3 @@ gf_col(InteractionMean~Treatment,fill=~Treatment, data=interaction_stats) |>
 # boxplot
 #gf_boxplot(as.numeric(Interaction)~Treatment,data=interactions_m)
 ```
-

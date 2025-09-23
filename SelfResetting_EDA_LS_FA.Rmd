@@ -142,7 +142,9 @@ intervals <- function(id, dates){
 ```{r}
 # visualize self resetting interval
 favstats(~AvgInterval,data=times_resetting)
-gf_histogram(~AvgInterval,data=times_resetting) |> gf_boxplot()
+gf_histogram(~AvgInterval,data=times_resetting) |> gf_labs(x="Mean days between servicing",y="Trap count") + theme_classic()
+
+table(times_resetting$AvgInterval)
 ```
 ```{r}
 # visualize non self resetting interval
@@ -182,6 +184,10 @@ resetting_analysis_data <- subset(resetting, BaitType =="Mayo" | BaitType=="Pean
 ```
 
 ```{r}
+write.csv(resetting_analysis_data,"~/Desktop/ENVR356/LS_FA/self_resetting_trap_data.csv", row.names = FALSE)
+```
+
+```{r}
 # look at the sample size for just pb and mayo single baits
 tally(~BaitType, data=resetting_analysis_data)
   # 680 Mayo, 653 Peanut butter
@@ -189,11 +195,16 @@ tally(~BaitType, data=resetting_analysis_data)
 
 ```{r}
 trapnz_model <- lmer(Strikes ~ BaitType + (1 | Date), data=resetting_analysis_data)
+resetting_analysis_data2 <- resetting_analysis_data |> mutate(Year = format(Date,"%Y"), Month = format(Date,"%m"))
+trapnz_model2 <- lmer(Strikes ~ BaitType + (1 | Year) + (1 | Month), data=resetting_analysis_data2)
+trapnz_model3 <- lmer(Strikes ~ BaitType + SpeciesCaught + (1 | Year) + (1 | Month), data=resetting_analysis_data2)
 ```
 
 ```{r}
 # stats for model
 summary(trapnz_model)
+summary(trapnz_model2)
+summary(trapnz_model3)
 
 #model2 <- lm(Strikes ~ BaitType +Date, data=resetting_analysis_data)
 #summary(model2)
@@ -220,6 +231,16 @@ gf_point(Strikes~Date,color=~BaitType,shape=~BaitType,data=resetting_analysis_da
 ```
 
 ```{r}
+gf_boxplot(Strikes~"",fill=~BaitType,data=resetting_analysis_data)
+```
+
+```{r}
+gf_histogram(Strikes~"" | BaitType,fill=~BaitType,position="identity",data=resetting_analysis_data)
+
+tally(~Strikes,data=subset(resetting_analysis_data,BaitType=="Peanut butter"))
+```
+
+```{r}
 # mutate to make a sprung or not binary variable
 sprung_analysis_data <- mutate(resetting_analysis_data, Sprung = Strikes>0)
 ```
@@ -239,3 +260,42 @@ gf_point(Sprung~Date,color=~BaitType,shape=~BaitType,data=sprung_analysis_data) 
   # logistic regression claims not to converge...
 ```
 
+```{r}
+
+sprung_rat_data <- mutate(resetting_analysis_data, Sprung = Strikes>0 & grepl("Rat",SpeciesCaught))
+
+z.test()
+tally(~BaitType,data=sprung_rat_data)
+table(sprung_rat_data[,c("BaitType","Sprung")])
+
+#table(BaitType~Sprung,data=subset(sprung_analysis_data, SpeciesCaught=="None" | grepl("Rat",SpeciesCaught)))
+```
+
+```{r}
+gf_bar(~Sprung,fill=~BaitType,data=sprung_analysis_data)
+gf_bar(~BaitType,fill=~Sprung,data=sprung_analysis_data)
+
+gf_bar(~BaitType,position="fill",fill=~Sprung,data=sprung_rat_data) |> gf_labs(x = "Bait type", y = "Proportion of traps", fill="Sprung by rat") + scale_fill_manual(values=c("#F8766D","#00BFC4"), labels = c("False", "True")) + theme_classic()
+```
+
+```{r}
+tally(~SpeciesCaught, data=resetting_analysis_data)
+
+species_grouped_h <- resetting_analysis_data |>
+  mutate(SpeciesCaught = fct_collapse(as.factor(SpeciesCaught),
+                                      #Bird = c("Magpie", "Other"),
+                                      Rat = c("Rat - Norway","Rat - Ship"), # "Rat - Kiore",
+                                      #Mustelid = c("Ferret","Stoat","Weasel"),
+                                      #'Other Mammal' = c("Cat","Hedgehog","Possum","Rabbit")
+                                      ))|>
+           fct_infreq() |> fct_rev()
+
+mosaicplot(BaitType~SpeciesCaught, 
+           data=resetting_analysis_data,
+           #srt = 45,
+           las=2,
+           color = c("red", "orange","gold", "green", "blue", "purple"),
+           main = "",
+           xlab = "Bait",
+           ylab = "Caught Species")
+```
