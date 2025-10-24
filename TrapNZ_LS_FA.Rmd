@@ -1,0 +1,143 @@
+---
+title: "TrapNZ_LS_FA"
+author: "Cass Lee"
+date: "2025-10-15"
+output: pdf_document
+---
+
+! For best results, run these code chunks sequentially in RStudio rather than creating a knitted document.
+
+## Preliminary Set Up
+
+```{r import libraries}
+# import useful libraries
+library(tidyverse)
+library(mosaic)
+library(ggformula)
+library(dplyr)
+library(lme4)
+library(effects)
+```
+
+```{r import data}
+# set import file path
+path <- 'full_data_trapnz.csv'
+# import full data set
+all_data <- read_csv(file = path)
+```
+
+## EDA and Data Wrangling
+
+```{r problems}
+# address initial problems when loading csv
+# problem is image links trying to translate to "logical" type
+# remove the image column
+neat_data <- select(all_data, -Images)
+glimpse(data)
+```
+
+```{r wrangling}
+# rename columns to work better for analysis
+colnames(neat_data) <- c("Line", "TrapID", "Code", "TrapType",
+                         "TrapSubType", "Tags", "Latitude",
+                         "Longitude","Easting","Northing","EntryID",
+                         "Date", "Status", "InitialBait", "Rebaited",
+                         "BaitType", "BaitDetails", "RecordedBy",
+                         "Strikes", "SpeciesCaught", "Sex",
+                         "Maturity","TrapCondition", "Notes")
+```
+
+```{r}
+# EDA for trap type, bait type over all data
+tally(~TrapType, data=neat_data)
+tally(~BaitType, data=neat_data)
+```
+
+```{r}
+# collect data for all traps baited with only mayonnaise (mayo) or only peanut butter (pb)
+  # track whether a trap was sprung by a rat (1 if record had at least one strike with the species caught marked as a rat, 0 otherwise)
+all_trap_type_data <- subset(neat_data, BaitType=="Mayo" | BaitType=="Peanut butter") |>
+  mutate(SprungRat = (Strikes > 0 & grepl("Rat",SpeciesCaught))) |>
+  mutate(Year = format(Date,"%Y"), Month = format(Date,"%m"))
+```
+
+```{r}
+# EDA for trap type, bait type over single-baited mayonnaise and peanut butter
+tally(~BaitType,data=all_trap_type_data)
+tally(SprungRat~BaitType,data=all_trap_type_data)
+tally(BaitType~TrapType, data= all_trap_type_data)
+```
+
+## Models for Predicting Trap Sprung By Rats
+
+```{r}
+# sprung by rat predicted by bait type
+  # random effects: year, month
+trapnz_model_all <- glmer(SprungRat ~ BaitType + (1 | Year) + (1 | Month), family=binomial, data=all_trap_type_data)
+
+summary(trapnz_model_all)
+```
+
+```{r}
+# sprung by rat predicted by bait type
+  # no random effects
+trapnz_model_no_time <- glm(SprungRat ~ BaitType, family=binomial, data=all_trap_type_data2)
+
+summary(trapnz_model_no_time)
+```
+
+```{r}
+# sprung by rat predicted by bait type
+  # random effects: trap type, year, month
+trapnz_model_all_by_trap <- glmer(SprungRat ~ BaitType + (1|TrapType) + (1 | Year) + (1 | Month), family=binomial, data=all_trap_type_data2)
+
+summary(trapnz_model_all_by_trap)
+```
+
+```{r}
+# sprung by rat predicted by bait type, trap type, and their interaction
+  # random effects: year, month
+trapnz_model_all_with_trap <- glmer(SprungRat ~ BaitType * TrapType + (1 | Year) + (1 | Month), family=binomial, data=all_trap_type_data)
+
+summary(trapnz_model_all_with_trap)
+```
+
+## Visualizations
+
+```{r}
+# visualize percentage of trap records sprung by rats, split by bait type
+gf_bar(~BaitType, fill=~SprungRat,data=all_trap_type_data,position="fill") |> 
+  gf_labs(y="Percentage of traps", x = "Bait", fill="Sprung by rat?") +
+  scale_fill_manual(values = c("#F8766D","#00BFC4"), labels = c("No", "Yes")) + 
+  scale_x_discrete(labels = c("Mayonnaise","Peanut butter")) +
+  theme_classic() +
+  theme(text = element_text(family = "Times New Roman"),
+        axis.text = element_text(color="black"))
+```
+
+Visualize sprung by rat as predicted by bait and trap type
+
+```{r}
+# proportion of traps sprung
+gf_bar(~BaitType | TrapType, fill=~SprungRat,data=all_trap_type_data,position="fill") |> gf_labs(y="Trap record count", x = "Bait", fill="Sprung by Rat?") + scale_fill_manual(values = c("#F8766D","#00BFC4"), labels = c("No", "Yes")) + scale_x_discrete(labels = c("","")) +
+  theme_classic() +
+  theme(text = element_text(family = "Times New Roman"),
+        axis.text = element_text(color="black"))
+```
+
+```{r}
+# number of traps sprung
+gf_bar(~BaitType, fill=~SprungRat,data=all_trap_type_data) |>
+  gf_facet_wrap(~TrapType, scales="free_y") |>
+  gf_labs(y="Trap record count", x = "Bait", fill="Sprung by Rat?") +
+  scale_fill_manual(values = c("#F8766D","#00BFC4"), labels = c("No", "Yes")) + 
+  scale_x_discrete(labels = c("","")) +
+  theme_classic() +
+  theme(text = element_text(family = "Times New Roman"),
+        axis.text = element_text(color="black"))
+```
+
+```{r}
+# tally for number of traps
+tally(SprungRat~TrapType + BaitType,data=all_trap_type_data)
+```

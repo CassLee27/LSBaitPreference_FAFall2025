@@ -1,0 +1,323 @@
+---
+title: "Mouse_LS_FA"
+author: "Cass Lee"
+date: "2025-09-17"
+output: pdf_document
+---
+
+
+! For best results, run these code chunks sequentially in RStudio rather than creating a knitted document.
+
+## Preliminary Set Up
+
+```{r import libraries}
+# import useful libraries
+library(tidyverse)
+library(mosaic)
+library(ggformula)
+library(dplyr)
+library(lme4)
+library(effects)
+```
+
+```{r import data}
+# set import file path
+path_m <- 'MouseData.tsv'
+# import full data set
+all_data_m <- read_tsv(file = path_m,col_types = "nnccntcncccccc")
+  # skip the two header rows
+# change the column names
+names(all_data_m) <- c("Site","Camera","SD","Month","Day","Time","FileName","NumMice","Left","Right","Majority","Rat","Notes","Observer","drop")
+# drop the extra row that was in the original sheet for data entry instructions
+all_data_m <- all_data_m |> select(-drop)
+```
+
+```{r}
+# drop videos where the date is invalid due to camera issues
+  # they are the source of the problems when loading the dataframe
+subset(all_data_m, is.na(Time))
+all_data_m <- all_data_m[!is.na(all_data_m$Time),]
+```
+
+```{r}
+# make analysis data frame
+analysis_data_m <- all_data_m |> 
+  # subset to only include observations with mice
+  subset(NumMice > 0) |>
+  # record dates and sample period
+  mutate(
+  MonthNum = case_when(Month == "Jul" ~ 7,
+                         Month == "Aug" ~ 8,
+                         Month == "Sep" ~ 9,
+                         .default = NA),
+  Date = as.POSIXct(paste("2025",MonthNum,Day,Time,sep=":"), tz="","%Y:%m:%d:%H:%M:%S"),
+  Period = case_when(Date < as.POSIXct("2025-07-28",tz="","%Y-%m-%d") ~ 1,
+                     Date > as.POSIXct("2025-08-18",tz="","%Y-%m-%d") ~ 3,
+                     .default = 2),
+  # calculate trap service interval (how long between trap services)
+  ServiceInterval = case_when(Period==1 ~ difftime(Date, as.POSIXct("2025-07-09",tz="","%Y-%m-%d"),units="days"),
+                     Period==2 ~ difftime(Date, as.POSIXct("2025-07-28",tz="","%Y-%m-%d"),units="days"),
+                     .default = difftime(Date, as.POSIXct("2025-08-18",tz="","%Y-%m-%d"),units="days")))
+```
+
+```{r}
+# automatically fill in the left tube treatment based on period and site
+treatments <- data.frame(Period=rep(1:3,each=10),Site=rep(1:10,3), LeftTubeTreatment=c("M","C","M","M","C","P","M","C","P","P",
+                    "C","M","P","P","M","P","P","M","C","C",
+                    "C","P","P","M","P","C","P","P","C","M"))
+
+analysis_data_m <- left_join(analysis_data_m,treatments)
+```
+
+```{r}
+# assemble clips into a group if videos were recorded on same date, within 5 minutes of each other
+grouped_analysis_data_m <- analysis_data_m |>
+  # get the difference between each video's recording time and the time of the video preceeding it
+  mutate(difft = abs(as.numeric(difftime(Time, lag(Time, default = first(Time)),units = 'mins')))) |>
+  # group videos by time difference less than 5 minutes
+   group_by(grp = cumsum(difft > 5), .add = TRUE) |> 
+  # aggregate relevant fields for the group
+  summarize(Site=Site[1], Camera=Camera[1], Month=Month[1], Day=Day[1], Time=Time[1], LeftTubeTreatment=LeftTubeTreatment[1],
+            LastDate = tail(Date,n=1), Date=Date[1], Period=Period[1], ServiceInterval=ServiceInterval[1], MaxMice = max(NumMice))
+```
+
+```{r}
+# separate out the different mice (may be multiple mice per video)
+split_mice_data_m <- analysis_data_m |>
+  # create new column for every "," present in a record
+  separate_longer_delim(c(Left,Right,Majority),",") |>
+  mutate(Left = as.numeric(Left), Right = as.numeric(Right))
+```
+
+```{r}
+# determine the first bait that each mouse went to in each video
+split_mice_data_m <- split_mice_data_m |>
+  mutate(FirstBait = case_when(Left=="1" ~ LeftTubeTreatment, # if the first tube was the left then record the left treatment
+                        Right=="1" & LeftTubeTreatment == "M" ~ "P", # if the first tube was the right and the left tube had mayonnaise (mayo) then record peanut butter (pb) as the first bait
+                        Right=="1" & LeftTubeTreatment == "P" ~ "M", # if the first tube was the right and the left tube had peanut butter then record mayo as the first bait
+                        Right=="1" & LeftTubeTreatment == "C" ~ "C", # if the first tube was the right and the left tube was control then record control as the first bait
+                        .default = "N")) # otherwise, no first bait
+```
+
+```{r}
+# aggregate the video data to get the first interaction for each group of videos
+
+# set up data frame to hold info
+mouse_first_int <- data.frame(grp=numeric(),Mouse=numeric(),FirstInt=character(),SecondInt=character())
+
+# for every group of videos (videos within 5 minutes of each other)
+for (g in 0:max(grouped_analysis_data_m$grp)){
+  # get group of videos' site and start and end time and date
+  grp_start_date <-
+    subset(grouped_analysis_data_m, grp==g)$Date
+  grp_end_date <-
+    subset(grouped_analysis_data_m, grp==g)$LastDate
+  grp_site <-
+    subset(grouped_analysis_data_m, grp==g)$Site
+  # select all videos within the group
+  grp_vids <- subset(split_mice_data_m,Site == grp_site & Date >= grp_start_date & Date <= grp_end_date)
+  # find the number of mice in the group
+  grp_num_mice <- max(grp_vids$NumMice)
+  # for each mouse in the group, find their first interaction and put it into the mouse_first_int table
+  for (i in 1:grp_num_mice){
+    # select all left and right interactions and first bait choice
+    mouse_ints <- grp_vids |> group_by(FileName) |> summarise(LInts = Left[i], RInts = Right[i], FirstBait = FirstBait[i])
+    # find first overall first interaction for ith mouse 
+      # handles the cases where there are no interactions for one or both of the left and right tubes across all videos in the group
+    FirstInt <- "N"
+    SecondInt <- "N"
+    il <- which(mouse_ints$LInts==1)[1]
+    ir <- which(mouse_ints$RInts==1)[1]
+    if (is.na(il)){
+      il = length(grp_vids)+1
+    }
+    if(is.na(ir)){
+      ir = length(grp_vids)+1
+    }
+    # if the left side had the earlier interaction
+    if (il < ir){
+      FirstInt = mouse_ints$FirstBait[il]
+      # if the right tube also had an interaction, record that as the second interaction
+      if (!is.na(which(mouse_ints$RInts>=1)[1])){
+        if (FirstInt == "M"){
+          SecondInt = "P"
+        } else if (FirstInt == "P"){
+          SecondInt = "M"
+        } else{
+          SecondInt = "C"
+        }
+      }
+    # if the right side had the earlier interaction
+    } else if (ir < il){
+      FirstInt = mouse_ints$FirstBait[ir]
+      # if the left tube also had an interaction, record that as the second interaction
+      if (!is.na(which(mouse_ints$LInts>=1)[1])){
+        if (FirstInt == "M"){
+          SecondInt = "P"
+        } else if (FirstInt == "P"){
+          SecondInt = "M"
+        } else{
+          SecondInt = "C"
+        }
+      }
+    }
+    # append the first and second bait interactions to a table
+    mouse_first_int <- mouse_first_int |> rows_append(data.frame(grp=g,Mouse=i,FirstInt=FirstInt, SecondInt=SecondInt))
+  }
+}
+```
+
+```{r}
+# assemble a complete data set from the first interaction for each mouse and information about the groups of videos
+ultimate_mouse_data <- left_join(mouse_first_int,grouped_analysis_data_m)
+```
+
+# Proportion Interactions
+
+Data set up
+- account for multiple mice per video, grouped videos if captured within 5 minutes, different tube number for control vs. mayo & pb
+
+```{r}
+# create new data frames that record whether a mouse interaction record had the given treatment type for each treatment
+mayo_interactions_revised <- ultimate_mouse_data$FirstInt=="M" | ultimate_mouse_data$SecondInt=="M"
+pb_interactions_revised <- ultimate_mouse_data$FirstInt=="P" | ultimate_mouse_data$SecondInt=="P"
+control_interactions_revised <- ultimate_mouse_data$FirstInt=="C"
+control_interactions_revised2 <- ultimate_mouse_data$SecondInt=="C"
+
+# assemble all the individual treatment interactions into one data frame
+interactions_revised_m <- data.frame(
+  Treatment = c(rep("C",length(control_interactions_revised)),
+                rep("C",length(control_interactions_revised2)),
+                rep("M",length(mayo_interactions_revised)),
+                rep("P",length(pb_interactions_revised))), 
+  Interaction = c(control_interactions_revised,
+                  control_interactions_revised2,
+                  mayo_interactions_revised,
+                  pb_interactions_revised)) |> 
+  mutate(AdjInteraction = case_when(Treatment=="C" ~ 
+                                      as.numeric(Interaction)/18,
+                                    .default =
+                                      as.numeric(Interaction)/21))
+```
+
+```{r}
+# EDA - look at the number of interactions for each treatment
+tally(Treatment~Interaction, data=interactions_revised_m)
+```
+
+```{r}
+# EDA - look at how adjustment of interaction ratio to account for tube number worked
+favstats(AdjInteraction~Treatment, data=interactions_revised_m)
+```
+
+```{r}
+# summarize data a bit more to get number of interactions per treatment
+interactions_revised_m_chi <- interactions_revised_m |> group_by(Treatment,Interaction) |> summarize(n = n())
+```
+
+Chi squares for comparisons of interaction number
+
+```{r}
+# test whether the number of control, mayo, pb interactions is different from random (21/60, 21/60, 18/60 respectively)
+chisq.test(subset(interactions_revised_m_chi,Interaction==TRUE)$n, p=c(0.30,0.35,0.35))
+```
+
+```{r}
+chisq.test(subset(interactions_revised_m_chi,Interaction==TRUE&Treatment!="C")$n, p=c(0.5,0.5))
+```
+
+Visualize interaction number by bait type
+
+```{r}
+gf_col(n~Treatment,fill=~Treatment, data=subset(interactions_revised_m_chi, Interaction==TRUE)) |>
+  gf_labs(y = "Number of interactions") + 
+  scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2"), labels = c("Control", "Mayonnaise","Peanut butter")) + scale_x_discrete(labels = c("Control", "Mayonnaise","Peanut butter")) + 
+  theme_classic() +
+  theme(text = element_text(family = "Times New Roman"),
+        axis.text = element_text(color="black"))
+```
+
+# First Interaction
+
+Chi-squares for first bait choice distribution
+
+```{r}
+# count the number of mouse observations for each mayo, pb, control, or none tubes
+firstbait_data_m <- ultimate_mouse_data |> 
+  group_by(FirstInt) |>
+  summarize(n = n())
+```
+
+```{r}
+# test whether the number of control, mayo, pb interactions is different from random (21/60, 21/60, 18/60 respectively)
+chisq.test(subset(firstbait_data_m,FirstInt!="N")$n, p=c(0.30,0.35,0.35))
+```
+
+```{r}
+# test whether the number of mayo, pb interactions is different from random (1/2 each)
+chisq.test(subset(firstbait_data_m, FirstInt=="M" | FirstInt=="P")$n, p=c(0.5,0.5))
+```
+
+Visualize first bait choice
+
+```{r}
+# visualize first bait choice
+gf_bar(~FirstInt,fill=~FirstInt,data=ultimate_mouse_data) |>
+  gf_labs(x = "First bait choice", y="Count", fill = "First bait choice") + scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2","grey50"), labels = c("Control", "Mayonnaise","Peanut butter", "None")) + scale_x_discrete(labels = c("Control", "Mayonnaise","Peanut butter", "None")) +
+  theme_classic() +
+  theme(text = element_text(family = "Times New Roman"),
+        axis.text = element_text(color="black"))
+```
+
+Mixed models for first bait choice over time
+
+```{r}
+# first bait predicted by time since servicing
+  # only includes mayo and pb first interactions (no control or none)
+  # random effects: sampling period, site
+firstbait_model_m <- glmer(as.factor(FirstInt) ~ ServiceInterval + (1 | Period)+(1|Site), data=subset(ultimate_mouse_data,FirstInt=="M" | FirstInt=="P"),family=binomial)
+
+summary(firstbait_model_m)
+```
+
+```{r}
+# first bait predicted by time since servicing and sampling period
+  # only includes mayo and pb first interactions (no control or none)
+  # random effects: site
+firstbait_period_model_m <- glmer(as.factor(FirstInt) ~ ServiceInterval + Period + (1|Site), data=subset(ultimate_mouse_data,FirstInt=="M" | FirstInt=="P"),family=binomial)
+summary(firstbait_period_model_m)
+```
+
+Visualize first bait choice over time 
+
+```{r}
+# bait station interaction over servicing interval
+baits <- c("Control", "Mayonnaise","Peanut butter","None")
+gf_histogram(~ServiceInterval, color=~FirstInt, fill=~FirstInt,data=ultimate_mouse_data) |> gf_labs(x="Days since station last serviced", y = "Count of bait stations") + scale_fill_manual(values = c("springgreen3","dodgerblue","grey50","darkorange2")) + scale_color_manual(values = c("springgreen3","dodgerblue","grey50","darkorange2")) + facet_grid(FirstInt~., labeller = labeller(FirstInt = baits)) + theme_classic() +
+  theme(text = element_text(family = "Times New Roman"),
+        axis.text = element_text(color="black"))
+```
+
+```{r}
+# bait station interaction over servicing interval for peanut butter versus mayo
+gf_histogram(~ServiceInterval, color=~FirstInt, fill=~FirstInt,position = "identity",data=subset(ultimate_mouse_data,FirstInt =="M" |FirstInt =="P")) |> gf_labs(x="Days since station last serviced", y = "Count of bait stations",fill="First bait choice",color="First bait choice") + scale_fill_manual(values = c("dodgerblue","darkorange2"),labels=c("Mayonnaise","Peanut butter")) + scale_color_manual(values = c("dodgerblue","darkorange2"),labels=c("Mayonnaise","Peanut butter")) + theme_classic() +
+  theme(text = element_text(family = "Times New Roman"),
+        axis.text = element_text(color="black"))
+```
+
+# Mice and Time
+
+```{r}
+# group the mouse data by time and location
+mice_by_date2 <- grouped_analysis_data_m |> group_by(Site, date=format(Date,"%Y-%m-%d")) |> summarise(SumNumMice = sum(MaxMice), .groups="drop")
+```
+
+```{r}
+# scatter plot and smoothed line representing number of mice per location over time
+gf_point(SumNumMice ~ as.POSIXct(date), data=mice_by_date2) |> 
+  gf_smooth() |> 
+  gf_labs(x="Date", y="Mice per station") + 
+  theme_classic() +
+  theme(text = element_text(family = "Times New Roman"),
+        axis.text = element_text(color="black"))
+```
