@@ -21,16 +21,18 @@ library(effects)
 
 ```{r import data}
 # set import file path
-path_f <- '~/Desktop/ENVR356/LS_FA/RatDataDraft.tsv'
+path_f <- '~/Desktop/ENVR356/LS_FA/RatData.tsv'
 # import full data set
 all_data_f <- read_tsv(file = path_f,col_types = "ccntccncnnnncc",skip=2)
   # skip the two header rows
 # change the column names
-names(all_data_f) <- c("Camera","Month","Day","Time","FileName","LeftTubeTreatment","RatNumber","FirstTube","TimeLeft","TimeRight","TimeArea","TimeTotal", "Observer","Notes")
+names(all_data_f) <- c("Camera","Month","Day","Time","FileName","LeftTubeTreatment","RatNumber","FirstTube","TimeLeft","TimeRight","TimeArea","TimeTotal", "Observer","Notes","A","B")
+all_data_f <- all_data_f |> select(-A,-B)
 ```
 
 ```{r}
 glimpse(all_data_f)
+
 ```
 ```{r}
 # transform the data to account for video length
@@ -56,11 +58,35 @@ analysis_data_f <- all_data_f |> mutate(
   TotalInteractionRatio = (TimeLeft+TimeRight)/TimeTotal,
   AreaRatio = TimeArea/TimeTotal,
   TotalRatio = (TimeLeft+TimeRight+TimeArea)/TimeTotal,
+  Site = paste(Camera,Period,sep="_"),
+  # TODO temporary way of including site
   FirstBait = case_when(FirstTube=="L" ~ LeftTubeTreatment, # if the first tube was the left then record the left treatment
                         FirstTube=="R" & LeftTubeTreatment == "M" ~ "P", # if the first tube was the right and the left tube had mayo then record peanut butter as the first bait
                         FirstTube=="R" & LeftTubeTreatment == "P" ~ "M", # if the first tube was the right and the left tube had peanut butter then record mayo as the first bait
                         FirstTube=="R" & LeftTubeTreatment == "C" ~ "C", # if the first tube was the right and the left tube was control then record control as the first bait
                         .default = NA)) # otherwise, no first bait
+```
+
+```{r}
+# try to group clips by same date and time within 5 minutes
+analysis_data_f <- analysis_data_f |> 
+  #group_by() |> 
+  mutate(difft = abs(as.numeric(difftime(Time, lag(Time, default = first(Time)),units = 'mins')))) |>
+  #mutate(diffd = abs(as.numeric(difftime(date, lag(date, default = first(date)),
+               #units = 'days')))) %>%
+   group_by(grp = cumsum(difft > 5), .add = TRUE) |> 
+  summarize(Site=Site[1],Camera=Camera[1], Month=Month[1], Day=Day[1], Time=Time[1], LeftTubeTreatment=LeftTubeTreatment[1], FirstTube=FirstTube[1],TimeLeft = sum(TimeLeft),TimeRight = sum(TimeRight),TimeArea = sum(TimeArea), TimeTotal=sum(TimeTotal), Date=Date[1], Period=Period[1], ServiceInterval=ServiceInterval[1], FirstBait=FirstBait[1]) |>
+  mutate(LeftRatio = TimeLeft/TimeTotal,
+  RightRatio = TimeRight/TimeTotal,
+  # actually need to transform to MayoRatio, PBRatio
+  #MayoRatio = case_when(LeftTubeTreatment =="M" ~ TimeLeft, .default ~ TimeRight) / TimeTotal, # time left if 
+  TotalInteractionRatio = (TimeLeft+TimeRight)/TimeTotal,
+  AreaRatio = TimeArea/TimeTotal,
+  TotalRatio = (TimeLeft+TimeRight+TimeArea)/TimeTotal)
+   #group_by(grp = cumsum(diffd > 365), add = TRUE) %>%
+   #summarise(N = n_distinct(meds)) %>%
+   #group_by(ID) %>%
+   #summarise(N = max(N))
 ```
 
 # Interaction Length
@@ -76,12 +102,12 @@ analysis_data_f <- all_data_f |> mutate(
 # left control tubes only
 lcontrol <- analysis_data_f |>
   subset(LeftTubeTreatment=="C") |>
-  select(FileName,LeftTubeTreatment,TimeLeft,LeftRatio,Period,ServiceInterval) |>
+  select(LeftTubeTreatment,TimeLeft,LeftRatio,Period,ServiceInterval,Site) |>
   rename(Treatment=LeftTubeTreatment,InteractionTime=TimeLeft,InteractionRatio=LeftRatio)
 # right control tubes only
 rcontrol <- analysis_data_f |>
   subset(LeftTubeTreatment=="C") |>
-  select(FileName,LeftTubeTreatment,TimeRight,RightRatio,Period,ServiceInterval) |>
+  select(LeftTubeTreatment,TimeRight,RightRatio,Period,ServiceInterval,Site) |>
   rename(Treatment=LeftTubeTreatment,InteractionTime=TimeRight,InteractionRatio=RightRatio)
 # mayo tubes only
 mayo <- analysis_data_f |>
@@ -91,7 +117,7 @@ mayo <- analysis_data_f |>
          InteractionRatio = case_when(LeftTubeTreatment =="M" ~ LeftRatio,
                                      .default = RightRatio),
          Treatment = "M") |>
-  select(FileName,Treatment,InteractionTime,InteractionRatio,Period,ServiceInterval)
+  select(Treatment,InteractionTime,InteractionRatio,Period,ServiceInterval,Site)
 # pb tubes only
 pb <- analysis_data_f |>
   subset(LeftTubeTreatment!="C") |>
@@ -100,7 +126,7 @@ pb <- analysis_data_f |>
          InteractionRatio = case_when(LeftTubeTreatment =="P" ~ LeftRatio,
                                      .default = RightRatio),
          Treatment = "P") |>
-  select(FileName,Treatment,InteractionTime,InteractionRatio,Period,ServiceInterval)
+  select(Treatment,InteractionTime,InteractionRatio,Period,ServiceInterval,Site)
 
 # combine the tube interaction data from both control tubes, mayo, and pb
 interaction_treatment_data <-  lcontrol |>
@@ -154,13 +180,23 @@ gf_boxplot(InteractionRatio~Treatment, fill=~Treatment,data=interaction_treatmen
   gf_labs(y="Proportion of Video Interacting with Tube") + 
   scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2"),
                     guide="none") +
+  scale_x_discrete(labels = c("Control","Mayonnaise","Peanut butter")) +
+  theme_classic()
+```
+
+```{r}
+# mean interaction ratio
+gf_histogram(InteractionRatio~"", fill=~Treatment,data=interaction_treatment_data,position="identity") |>
+  gf_labs(y="Proportion of Video Interacting with Tube") + 
+  scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2"),
+                    guide="none") +
   scale_x_discrete(labels = c("Control","Mayo","Peanut butter")) +
   theme_classic()
 ```
 
 ```{r}
 # mixed model to predict interaction length with the time since servicing
-interaction_ratio_model <- lmer(InteractionRatio ~ Treatment + ServiceInterval + (1 | Period),data=interaction_treatment_data) #+ (1 | Location) + (1 | TimeOfDay)
+interaction_ratio_model <- lmer(InteractionRatio ~ Treatment + ServiceInterval + (1 | Period)+ (1 | Site),data=interaction_treatment_data) #+ (1 | Location) + (1 | TimeOfDay)
 summary(interaction_ratio_model)
 
 #TODO maybe visualize this
@@ -173,10 +209,50 @@ summary(interaction_ratio_model)
 gf_point(InteractionRatio ~ ServiceInterval, color=~Treatment,shape=~as.factor(Period),data=interaction_treatment_data) + scale_color_manual(values = c("springgreen3","dodgerblue","darkorange2")) + theme_classic()
 ```
 
+```{r}
+# visualize mixed model somehow
+gf_point(InteractionRatio ~ ServiceInterval, color=~Treatment, shape=~Treatment,data=interaction_treatment_data) |>
+  gf_labs(x = "Days since station last serviced", y = "Proportion of video interacting with tube") + scale_color_manual(values = c("springgreen3","dodgerblue","darkorange2"), labels=c("Control", "Mayonnaise","Peanut butter")) + scale_shape_manual(values=c("circle","triangle","square"), labels=c("Control", "Mayonnaise","Peanut butter"))+ theme_classic()
+```
+
+```{r}
+#interaction_ratio_model <- lmer(InteractionRatio ~ Treatment + ServiceInterval + (1 | Period)+ (1 | Site),data=interaction_treatment_data) #+ (1 | Location) + (1 | TimeOfDay)
+
+ServiceInterval.vec.pred <- seq(min(interaction_treatment_data$ServiceInterval),max(interaction_treatment_data$ServiceInterval),length.out=100)
+
+dat.pred <- expand.grid(ServiceInterval.vec.pred, interaction_treatment_data$Treatment)
+
+colnames(dat.pred) <- c("ServiceInterval","Treatment")
+
+dat.pred$y <- predict(interaction_ratio_model,newdata=dat.pred,re.form=NA)
+
+gf_point(InteractionRatio ~ ServiceInterval, color=~Treatment,shape=~Treatment, data=interaction_treatment_data) |> 
+  gf_line(y ~ ServiceInterval, color=~Treatment, data=dat.pred) |>
+  gf_labs(x = "Days since station last serviced", y = "Proportion of video interacting with tube") + scale_color_manual(values = c("springgreen3","dodgerblue","darkorange2"), labels=c("Control", "Mayonnaise","Peanut butter")) + scale_shape_manual(values=c("circle","triangle","square"), labels=c("Control", "Mayonnaise","Peanut butter")) +
+ theme_classic()
+```
+
+
+
 # First Interaction Choice
 
 ```{r}
 #We then tested if there was a significant difference in the number of times rats interacted first with peanut butter versus mayonnaise using a chi-square test.
+
+firstbait_data <- analysis_data_f |> 
+  group_by(FirstBait) |>
+  summarize(n = n()) |>
+  subset(FirstBait == "P" | FirstBait=="M")
+
+firstbait_anova <- aov(n~FirstBait,data=na.omit(firstbait_data))
+summary(firstbait_anova)
+
+
+chisq.test(firstbait_data$n, p=c(0.25,0.25,0.25,0.25))
+  # 30 total, 21 mayo or pb, 
+  # https://www.sthda.com/english/wiki/chi-square-goodness-of-fit-test-in-r
+# x is treatment
+# y is # of visits
 
 # how should controls be accounted for here?
 # is it best to do multiple comparisons?
@@ -189,7 +265,11 @@ gf_point(InteractionRatio ~ ServiceInterval, color=~Treatment,shape=~as.factor(P
 
 ```{r}
 # mixed model to predict first bait with the time since servicing
-glmer(FirstBait ~ ServiceInterval + (1 | Period),family="binomial",data=analysis_data_f)
+firstbait_model <- glmer(as.factor(FirstBait) ~ ServiceInterval + (1 | Period)+ (1 | Site),family="binomial",data=analysis_data_f)
+
+summary(firstbait_model)
+
+#tally(~Period,data=analysis_data_f)
 
 # We used a logistic mixed effects model with the same random effects and the fixed effect of time since service to predict which bait type would be chosen first.
 ```
@@ -200,3 +280,16 @@ gf_boxplot(FirstBait ~ ServiceInterval, fill=~FirstBait,data=analysis_data_f)
 
 gf_histogram(~ServiceInterval, fill=~FirstBait,data=analysis_data_f,position="identity") + scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2","grey")) + theme_classic()
 ```
+
+```{r}
+# interactions over time
+gf_histogram(~ServiceInterval,data=analysis_data_f)
+```
+
+```{r}
+# first bait
+gf_bar(~FirstBait,fill=~FirstBait,data=analysis_data_f) |>
+  gf_labs(x = "First bait choice", y="Count", fill = "First bait choice") + scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2"), labels = c("Control", "Mayonnaise","Peanut butter", "None")) + scale_x_discrete(labels = c("Control", "Mayonnaise","Peanut butter", "None")) +
+  theme_classic()
+```
+

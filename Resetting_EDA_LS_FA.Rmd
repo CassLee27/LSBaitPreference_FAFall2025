@@ -1,0 +1,267 @@
+---
+title: "Resetting_EDA_LS_FA"
+author: "Cass Lee"
+date: "2025-09-15"
+output: pdf_document
+---
+
+! For best results, run these code chunks sequentially in RStudio rather than creating a knitted document.
+
+## Preliminary Set Up
+
+```{r import libraries}
+# import useful libraries
+library(tidyverse)
+library(mosaic)
+library(ggformula)
+library(dplyr)
+library(lme4)
+library(effects)
+```
+
+```{r import data}
+# set import file path
+path_r <- 'full_data_trapnz.csv'
+# import full data set
+all_data_r <- read_csv(file = path_r)
+```
+
+## Data Wrangling
+
+```{r problems}
+# address initial problems when loading csv
+# image links trying to translate to logical
+# remove the image column
+neat_data_r <- select(all_data_r, -Images)
+```
+
+```{r wrangling}
+# rename columns to work better for analysis
+colnames(neat_data_r) <- c("Line", "TrapID", "Code", "TrapType",
+                         "TrapSubType", "Tags", "Latitude",
+                         "Longitude","Easting","Northing","EntryID",
+                         "Date", "Status", "InitialBait", "Rebaited",
+                         "BaitType", "BaitDetails", "RecordedBy",
+                         "Strikes", "SpeciesCaught", "Sex",
+                         "Maturity","TrapCondition", "Notes")
+```
+
+Trap type notes
+
+```{r}
+# Are trap types single-kill or self-resetting?
+  # 27 records have unspecified trap type
+  # single: cage trap, D-Rat, DOC 200, DOC 250, leg hold trap, rat trap, SA cat, Tāwhiti - Smart Cage, trapinator
+    # cage trap, leg hold trap, Tāwhiti - Smart Cage is live capture
+    # "rat trap"'s resetting type isn't specified but we can probably pretty safely assume it's single trap per set
+  # self-resetting: AT220, sentinel, supervisor max
+    # sentinel, supervisor max assumed to not be by looking up quickly but actually recorded as having multiple strikes sometimes
+
+# sentinel trap is specifically for possums, supposed to stop rats from getting bait
+```
+
+```{r}
+# get all self-resetting trap data for traps baited with mayonnaise (mayo) or peanut butter (pb)
+resetting <- subset(neat_data_r, grepl("MAYO", toupper(BaitType)) | grepl("PEANUT BUTTER", toupper(BaitType))) |>
+  subset(grepl("AT220", TrapType) | grepl("Sentinel", TrapType) | grepl("Supervisor Max", TrapType))
+```
+
+```{r}
+# single-kill trap data baited with mayo or pb
+nonresetting <- subset(neat_data_r, grepl("MAYO", toupper(BaitType)) | grepl("PEANUT BUTTER", toupper(BaitType))) |>
+  subset(!(grepl("AT220", TrapType) | grepl("Sentinel", TrapType) | grepl("Supervisor Max", TrapType)))
+```
+
+## EDA
+
+```{r}
+# examine trap types
+tally(~TrapType, data=neat_data_r)
+```
+
+```{r}
+# examine bait types
+#tally(~BaitType, data=neat_data_r)
+  # this listing for all bait types is very long, uncomment with caution
+```
+
+```{r}
+# date range for data
+min(~Date,data=neat_data_r)
+max(~Date,data=neat_data_r)
+```
+
+Average servicing interval
+
+```{r}
+# find average servicing interval for self-resetting traps
+avg_interval <- function(id, dates){
+  total_interval <- 0
+  # for every record and the record after it, calculate the interval between the records (the servicing interval)
+  for (i in 1:(length(dates)-1)){
+    total_interval <- total_interval + difftime(dates[i+1],dates[i],units="days")
+  }
+  # if there is less than two records, return 0 as the servicing interval
+  if (length(dates) <= 1){
+    return(as.difftime(0,units="days"))
+  }
+  # otherwise, take the average of the calculated pairwise intervals
+  else{return(total_interval/(length(dates)-1))}
+}
+
+# calculate average servicing interval for self-resetting and single-kill traps
+times_resetting <- resetting |> group_by(TrapID) |> summarize(AvgInterval = avg_interval(TrapID,Date)[1], n = n())
+times_nonresetting <- nonresetting |> group_by(TrapID) |> summarize(AvgInterval = avg_interval(TrapID,Date)[1], n = n())
+```
+
+```{r}
+# visualize self resetting interval
+favstats(~AvgInterval,data=subset(times_resetting,AvgInterval>0))
+
+gf_histogram(~AvgInterval,data=subset(times_resetting,AvgInterval>0)) |>
+  gf_boxplot() |>
+  gf_labs(x="Mean days between servicing",y="Trap count") +
+  theme_classic()
+```
+
+```{r}
+# visualize non self resetting interval
+favstats(~AvgInterval,data=times_nonresetting)
+
+gf_histogram(~AvgInterval,data=times_nonresetting) |> 
+  gf_boxplot() |>
+  gf_labs(x="Mean days between servicing",y="Trap count") +
+  theme_classic()
+```
+
+```{r}
+# non parametric two sample mean comparison for average servicing interval
+wilcox.test(as.numeric(times_nonresetting$AvgInterval),as.numeric(times_resetting$AvgInterval))
+  # the average servicing interval between not resetting and self resetting is meaningfully different, p < 0.001
+```
+
+Trap reset number
+
+```{r}
+# visualize how many times each trap is reset
+favstats(~n, data=times)
+gf_histogram(~n,data=times) |> 
+  gf_boxplot() |>
+  gf_labs(x="Number of resets per trap") + 
+  theme_classic()
+```
+
+Self-resetting traps
+
+```{r}
+# examine bait types for self-resetting traps
+#tally(~BaitType, data=resetting)
+  # another very long list
+```
+
+```{r}
+# subset to just traps single-baited with mayonnaise or peanut butter
+resetting_analysis_data <- subset(resetting, BaitType =="Mayo" | BaitType=="Peanut butter")
+```
+
+```{r}
+# look at the sample size for just pb and mayo single baits
+tally(~BaitType, data=resetting_analysis_data)
+  # 680 Mayo, 653 Peanut butter
+```
+
+```{r}
+# further examine which trap types catch multiple animals per record
+tally(TrapType~BaitType, data=resetting_analysis_data)
+tally(~TrapType,data=subset(resetting_analysis_data,Strikes>0))
+```
+
+```{r}
+# Sentinel
+favstats(~Strikes,data=subset(resetting_analysis_data,TrapType=="Sentinel"))
+tally(~Strikes,data=subset(resetting_analysis_data,TrapType=="Sentinel"))
+subset(resetting_analysis_data,Strikes>0&TrapType=="Sentinel")
+```
+
+```{r}
+# Supervisor Max
+tally(~Strikes,data=subset(resetting_analysis_data,Strikes>0 &TrapType=="Supervisor Max"))
+```
+
+# TODO finish cleaning everything under this line
+
+```{r}
+trapnz_model <- lmer(Strikes ~ BaitType + (1 | Date), data=resetting_analysis_data)
+resetting_analysis_data2 <- resetting_analysis_data |> mutate(Year = format(Date,"%Y"), Month = format(Date,"%m"))
+trapnz_model2 <- lmer(Strikes ~ BaitType + (1 | Year) + (1 | Month), data=resetting_analysis_data2)
+trapnz_model3 <- lmer(Strikes ~ BaitType + SpeciesCaught + (1 | Year) + (1 | Month), data=resetting_analysis_data2)
+
+resetting_rat <- resetting_analysis_data2 |> mutate(SprungByRat = Strikes>0 & grepl("Rat",SpeciesCaught))
+
+trapnz_model4 <- glmer(SprungByRat ~ BaitType + (1 | Year) + (1 | Month), family=binomial, data=resetting_rat)
+summary(trapnz_model4)
+```
+
+```{r}
+# stats for model
+summary(trapnz_model)
+summary(trapnz_model2)
+summary(trapnz_model3)
+
+#model2 <- lm(Strikes ~ BaitType +Date, data=resetting_analysis_data)
+#summary(model2)
+  # p value for bait type is very low
+
+```
+
+```{r}
+gf_boxplot(Strikes~"",fill=~BaitType,data=resetting_analysis_data)
+```
+
+```{r}
+# mutate to make a sprung or not binary variable
+sprung_analysis_data <- mutate(resetting_analysis_data, Sprung = Strikes>0)
+```
+
+```{r}
+
+sprung_rat_data <- mutate(resetting_analysis_data, Sprung = Strikes>0 & grepl("Rat",SpeciesCaught))
+
+#z.test()
+tally(~BaitType,data=sprung_rat_data)
+table(sprung_rat_data[,c("BaitType","Sprung")])
+
+#table(BaitType~Sprung,data=subset(sprung_analysis_data, SpeciesCaught=="None" | grepl("Rat",SpeciesCaught)))
+```
+
+```{r}
+gf_bar(~Sprung,fill=~BaitType,data=sprung_analysis_data)
+gf_bar(~BaitType,fill=~Sprung,data=sprung_analysis_data)
+
+gf_bar(~BaitType,position="fill",fill=~Sprung,data=sprung_rat_data) |> gf_labs(x = "Bait type", y = "Proportion of traps", fill="Sprung by rat") + scale_fill_manual(values=c("#F8766D","#00BFC4"), labels = c("False", "True")) + theme_classic()
+```
+
+```{r}
+tally(~SpeciesCaught, data=resetting_analysis_data)
+```
+
+```{r}
+# strikes over time
+# sprung by rats over time
+gf_histogram(~Date, fill=~BaitType,position="identity", data=sprung_rat_data)
+gf_histogram(..density..~Date, fill=~Sprung, data=sprung_rat_data) |>
+  gf_labs(y="Trap count", fill="Sprung by rat") + facet_grid(BaitType~.,labeller=labeller("Mayonnaise", "Peanut butter")) + scale_fill_manual(values=c("#F8766D","#00BFC4"), labels = c("False", "True")) + theme_classic()
+```
+
+Check other single baits and combinations for sample size
+```{r}
+# check for most popular bait
+tally(~BaitType, data=neat_data) |> as.data.frame() |> arrange(desc(Freq))
+```
+
+```{r}
+# filter to only single bait records (bait type doesn't contain commas)
+single_bait <- subset(neat_data, !grepl(",", BaitType))
+tally(~BaitType, data=single_bait)
+  # 30 single bait types (including none and other)
+```

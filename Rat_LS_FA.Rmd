@@ -1,0 +1,250 @@
+---
+title: "Rat_LS_FA"
+author: "Cass Lee"
+date: "2025-09-16"
+output: pdf_document
+---
+
+! For best results, run these code chunks sequentially in RStudio rather than creating a knitted document.
+
+## Preliminary Set Up
+
+```{r import libraries}
+# import useful libraries
+library(tidyverse)
+library(mosaic)
+library(ggformula)
+library(dplyr)
+library(lme4)
+library(effects)
+```
+
+```{r import data}
+# set import file path
+path_f <- 'RatData.tsv'
+# import full data set
+all_data_f <- read_tsv(file = path_f,col_types = "ccntccncnnnncc",skip=2)
+  # skip the two header rows
+# change the column names
+names(all_data_f) <- c("Camera","Month","Day","Time","FileName","LeftTubeTreatment","RatNumber","FirstTube","TimeLeft","TimeRight","TimeArea","TimeTotal", "Observer","Notes","A","B")
+# drop the extra rows that were in the original sheet for data entry instructions
+all_data_f <- all_data_f |> select(-A,-B)
+```
+
+```{r}
+# make analysis data frame
+analysis_data_f <- all_data_f |> mutate(
+  # record dates and sample period
+  MonthNum = case_when(Month == "Jul" ~ 7,
+                         Month == "Aug" ~ 8,
+                         Month == "Sep" ~ 9,
+                         .default = NA),
+  Date = as.POSIXct(paste("2025",MonthNum,Day,Time,sep=":"), tz="","%Y:%m:%d:%H:%M:%S"),
+  Period = case_when(Date < as.POSIXct("2025-07-28",tz="","%Y-%m-%d") ~ 1,
+                     Date > as.POSIXct("2025-08-18",tz="","%Y-%m-%d") ~ 3,
+                     .default = 2),
+  # calculate trap service interval (how long between trap services)
+  ServiceInterval = case_when(Period==1 ~ difftime(Date, as.POSIXct("2025-07-09",tz="","%Y-%m-%d"),units="days"),
+                     Period==2 ~ difftime(Date, as.POSIXct("2025-07-28",tz="","%Y-%m-%d"),units="days"),
+                     .default = difftime(Date, as.POSIXct("2025-08-18",tz="","%Y-%m-%d"),units="days")),
+  # autogenerate site identifiers
+  Site = paste(Camera,Period,sep="_"),
+  # determine the first bait rat went to in each video
+  FirstBait = case_when(FirstTube=="L" ~ LeftTubeTreatment, # if the first tube was the left then record the left treatment
+                        FirstTube=="R" & LeftTubeTreatment == "M" ~ "P", # if the first tube was the right and the left tube had mayonnaise (mayo) then record peanut butter (pb) as the first bait
+                        FirstTube=="R" & LeftTubeTreatment == "P" ~ "M", # if the first tube was the right and the left tube had peanut butter then record mayo as the first bait
+                        FirstTube=="R" & LeftTubeTreatment == "C" ~ "C", # if the first tube was the right and the left tube was control then record control as the first bait
+                        .default = NA)) # otherwise, no first bait
+```
+
+```{r}
+# assemble clips into a group if videos were recorded on same date, within 5 minutes of each other
+analysis_data_f <- analysis_data_f |>
+  # get the difference between each video's recording time and the time of the video preceeding it
+  mutate(difft = abs(as.numeric(difftime(Time, lag(Time, default = first(Time)),units = 'mins')))) |>
+  # group videos by time difference less than 5 minutes
+  group_by(grp = cumsum(difft > 5), .add = TRUE) |> 
+  # aggregate relevant fields for the group
+  summarize(Site=Site[1],Camera=Camera[1], Month=Month[1], Day=Day[1], Time=Time[1], LeftTubeTreatment=LeftTubeTreatment[1], FirstTube=FirstTube[1],TimeLeft = sum(TimeLeft),TimeRight = sum(TimeRight),TimeArea = sum(TimeArea), TimeTotal=sum(TimeTotal), Date=Date[1], Period=Period[1], ServiceInterval=ServiceInterval[1], FirstBait=FirstBait[1]) |>
+  # transform the data into ratios to account for video length
+  mutate(LeftRatio = TimeLeft/TimeTotal,
+  RightRatio = TimeRight/TimeTotal,
+  TotalInteractionRatio = (TimeLeft+TimeRight)/TimeTotal,
+  AreaRatio = TimeArea/TimeTotal,
+  TotalRatio = (TimeLeft+TimeRight+TimeArea)/TimeTotal)
+```
+
+# Interaction Length
+
+Transform data
+
+```{r}
+# transform from left and right tube treatment into interactions for bait types:
+  # select all control
+  # get all left controls
+  # get all right controls
+  # select all mayo or pb
+  # get all mayo ratios
+  # get all pb ratios
+  # append mayo and pb tables to the two control tables
+
+# left control tubes only
+lcontrol <- analysis_data_f |>
+  subset(LeftTubeTreatment=="C") |>
+  select(LeftTubeTreatment,TimeLeft,LeftRatio,Period,ServiceInterval,Site) |>
+  rename(Treatment=LeftTubeTreatment,InteractionTime=TimeLeft,InteractionRatio=LeftRatio)
+# right control tubes only
+rcontrol <- analysis_data_f |>
+  subset(LeftTubeTreatment=="C") |>
+  select(LeftTubeTreatment,TimeRight,RightRatio,Period,ServiceInterval,Site) |>
+  rename(Treatment=LeftTubeTreatment,InteractionTime=TimeRight,InteractionRatio=RightRatio)
+# mayo tubes only
+mayo <- analysis_data_f |>
+  subset(LeftTubeTreatment!="C") |>
+  mutate(InteractionTime = case_when(LeftTubeTreatment =="M" ~ TimeLeft,
+                                     .default = TimeRight),
+         InteractionRatio = case_when(LeftTubeTreatment =="M" ~ LeftRatio,
+                                     .default = RightRatio),
+         Treatment = "M") |>
+  select(Treatment,InteractionTime,InteractionRatio,Period,ServiceInterval,Site)
+# pb tubes only
+pb <- analysis_data_f |>
+  subset(LeftTubeTreatment!="C") |>
+  mutate(InteractionTime = case_when(LeftTubeTreatment =="P" ~ TimeLeft,
+                                     .default = TimeRight),
+         InteractionRatio = case_when(LeftTubeTreatment =="P" ~ LeftRatio,
+                                     .default = RightRatio),
+         Treatment = "P") |>
+  select(Treatment,InteractionTime,InteractionRatio,Period,ServiceInterval,Site)
+
+# combine the tube interaction data from both control tubes, mayo, and pb
+interaction_treatment_data <-  lcontrol |>
+  rows_append(rcontrol) |> 
+  rows_append(mayo) |>
+  rows_append(pb)
+```
+
+```{r}
+favstats(~InteractionRatio, data=interaction_treatment_data)
+```
+
+ANOVA for difference in mean interaction ratio by bait type
+
+```{r}
+# ANOVA for mean interaction ratio
+interaction_anova <- aov(InteractionRatio ~ Treatment,data=interaction_treatment_data)
+summary(interaction_anova)
+```
+
+```{r}
+# post-hoc test for pairwise comparisons
+TukeyHSD(interaction_anova)
+```
+
+Visualize mean interaction ratio
+
+```{r}
+# boxplot of mean interaction ratio for different bait station options
+gf_boxplot(InteractionRatio~Treatment, fill=~Treatment,data=interaction_treatment_data) |>
+  gf_labs(y="Proportion of video interacting with tube") + 
+  scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2"),
+                    guide="none") +
+  scale_x_discrete(labels = c("Control","Mayonnaise","Peanut butter")) +
+  theme_classic() +
+  theme(text = element_text(family = "Times New Roman"),
+        axis.text = element_text(color="black"))
+```
+
+Mixed models for interaction length by bait over time
+
+```{r}
+# interaction length predicted by treatment and time since servicing
+  # random effects: sampling period, site
+interaction_ratio_model <- lmer(InteractionRatio ~ Treatment + ServiceInterval + (1 | Period) + (1 | Site), data=interaction_treatment_data)
+summary(interaction_ratio_model)
+```
+
+```{r}
+# interaction length predicted by treatment, time since servicing, and their interaction
+  # random effects: sampling period, site
+  # not included in final report
+interaction_ratio_model_times <- lmer(InteractionRatio ~ Treatment * ServiceInterval + (1 | Period) + (1 | Site), data=interaction_treatment_data)
+summary(interaction_ratio_model_times)
+```
+
+Visualize interaction ratio for baits over time
+
+```{r}
+# visualize model using predictions to fit a representative line to the scatterplot of interaction ratio by time
+
+# choose evenly spaced values for service interval
+  # prediction of interaction ratio will be done for these points
+ServiceInterval.vec.pred <- seq(min(interaction_treatment_data$ServiceInterval),max(interaction_treatment_data$ServiceInterval),length.out=100)
+# make full grid of values for predictors: service interval and treatment
+dat.pred <- expand.grid(ServiceInterval.vec.pred, interaction_treatment_data$Treatment)
+# set column names to variable names
+colnames(dat.pred) <- c("ServiceInterval","Treatment")
+# predict interaction ratio for all the points in the grid of predictor values
+dat.pred$y <- predict(interaction_ratio_model,newdata=dat.pred,re.form=NA)
+# graph scatterplot and line representing predicted values
+gf_point(InteractionRatio ~ ServiceInterval, color=~Treatment,shape=~Treatment, data=interaction_treatment_data) |> 
+  gf_line(y ~ ServiceInterval, color=~Treatment, data=dat.pred) |>
+  gf_labs(x = "Days since station last serviced", y = "Proportion of video interacting with tube") + scale_color_manual(values = c("springgreen3","dodgerblue","darkorange2"), labels=c("Control", "Mayonnaise","Peanut butter")) + scale_shape_manual(values=c("circle","triangle","square"), labels=c("Control", "Mayonnaise","Peanut butter")) +
+ theme_classic() +
+  theme(text = element_text(family = "Times New Roman"),
+        axis.text = element_text(color="black"))
+```
+
+# First Interaction Choice
+
+Chi-squares for first bait choice distribution
+
+```{r}
+# count the number of rat observations for each mayo, pb, control, or none tubes
+firstbait_data <- analysis_data_f |> 
+  group_by(FirstBait) |>
+  summarize(n = n())
+```
+
+```{r}
+# test whether the number of control, mayo, pb interactions is different from random (21/60, 21/60, 18/60 respectively)
+chisq.test(subset(firstbait_data,!is.na(FirstBait))$n, p=c(0.30,0.35,0.35))
+```
+
+Visualize first bait choice
+
+```{r}
+# bar graph of first bait interaction number
+gf_bar(~FirstBait,fill=~FirstBait,data=analysis_data_f) |>
+  gf_labs(x = "First bait choice", y="Count", fill = "First bait choice") + scale_fill_manual(values = c("springgreen3","dodgerblue","darkorange2"), labels = c("Control", "Mayonnaise","Peanut butter", "None")) + scale_x_discrete(labels = c("Control", "Mayonnaise","Peanut butter", "None")) +
+  theme_classic() +
+  theme(text = element_text(family = "Times New Roman"),
+        axis.text = element_text(color="black"))
+```
+
+Mixed model for first bait choice over time
+
+```{r}
+# first bait choice predicted by the time since servicing
+  # random effects: sampling period, site
+firstbait_model <- glmer(as.factor(FirstBait) ~ ServiceInterval + (1 | Period) + (1 | Site), family="binomial", data=analysis_data_f)
+summary(firstbait_model)
+```
+
+Visualize interaction over time
+
+```{r}
+# rats over servicing interval
+gf_histogram(~ServiceInterval,data=analysis_data_f) 
+```
+
+# Rats and Time
+
+```{r}
+# visualize number of rats over time
+gf_histogram(~as.POSIXct(Date), data=analysis_data_f)|> 
+  gf_labs(x="Date", y="Rats") + 
+  theme_classic()  +
+  theme(text = element_text(family = "Times New Roman"),
+        axis.text = element_text(color="black"))
+```
