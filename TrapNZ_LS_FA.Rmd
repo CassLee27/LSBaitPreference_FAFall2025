@@ -81,7 +81,7 @@ summary(trapnz_model_all)
 ```{r}
 # sprung by rat predicted by bait type
   # no random effects
-trapnz_model_no_time <- glm(SprungRat ~ BaitType, family=binomial, data=all_trap_type_data2)
+trapnz_model_no_time <- glm(SprungRat ~ BaitType, family=binomial, data=all_trap_type_data)
 
 summary(trapnz_model_no_time)
 ```
@@ -89,7 +89,7 @@ summary(trapnz_model_no_time)
 ```{r}
 # sprung by rat predicted by bait type
   # random effects: trap type, year, month
-trapnz_model_all_by_trap <- glmer(SprungRat ~ BaitType + (1|TrapType) + (1 | Year) + (1 | Month), family=binomial, data=all_trap_type_data2)
+trapnz_model_all_by_trap <- glmer(SprungRat ~ BaitType + (1|TrapType) + (1 | Year) + (1 | Month), family=binomial, data=all_trap_type_data)
 
 summary(trapnz_model_all_by_trap)
 ```

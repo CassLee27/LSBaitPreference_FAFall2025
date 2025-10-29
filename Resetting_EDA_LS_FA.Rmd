@@ -144,8 +144,8 @@ Trap reset number
 
 ```{r}
 # visualize how many times each trap is reset
-favstats(~n, data=times)
-gf_histogram(~n,data=times) |> 
+favstats(~n, data=times_resetting)
+gf_histogram(~n,data=times_resetting) |> 
   gf_boxplot() |>
   gf_labs(x="Number of resets per trap") + 
   theme_classic()
@@ -249,19 +249,19 @@ tally(~SpeciesCaught, data=resetting_analysis_data)
 # strikes over time
 # sprung by rats over time
 gf_histogram(~Date, fill=~BaitType,position="identity", data=sprung_rat_data)
-gf_histogram(..density..~Date, fill=~Sprung, data=sprung_rat_data) |>
+gf_histogram(~Date, fill=~Sprung, data=sprung_rat_data) |>
   gf_labs(y="Trap count", fill="Sprung by rat") + facet_grid(BaitType~.,labeller=labeller("Mayonnaise", "Peanut butter")) + scale_fill_manual(values=c("#F8766D","#00BFC4"), labels = c("False", "True")) + theme_classic()
 ```
 
 Check other single baits and combinations for sample size
 ```{r}
 # check for most popular bait
-tally(~BaitType, data=neat_data) |> as.data.frame() |> arrange(desc(Freq))
+tally(~BaitType, data=neat_data_r) |> as.data.frame() |> arrange(desc(Freq))
 ```
 
 ```{r}
 # filter to only single bait records (bait type doesn't contain commas)
-single_bait <- subset(neat_data, !grepl(",", BaitType))
+single_bait <- subset(neat_data_r, !grepl(",", BaitType))
 tally(~BaitType, data=single_bait)
   # 30 single bait types (including none and other)
 ```
