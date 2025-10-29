@@ -19,4 +19,6 @@ Code files
 * Resetting_EDA_LS_FA.Rmd
   * Additional exploratory data analysis comparing self-resetting and non-self-resetting traps (ex. average servicing interval, sample size)
 
+Possible problem: changing the graph font may not work for all users, commenting out the command that includes: "+ theme(text = [...] )" in the code for the graphs should resolve this issue.
+
 This code was hacked together by someone with limited R experience - if any of it is too incomprehensible, feel free to reach out by mentioning me @CassLee27 in a discussion post for the repository!
