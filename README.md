@@ -17,6 +17,7 @@ Code files
 * TrapNZ_LS_FA.Rmd
   * Statistical analysis, data visualization for Trap.NZ records
 * Resetting_EDA_LS_FA.Rmd
+  * EDA for seemingly non-self-resetting trap types with multiple strikes
   * Additional exploratory data analysis comparing self-resetting and non-self-resetting traps (ex. average servicing interval, sample size)
 
 Possible problem: changing the graph font may not work for all users, commenting out the command that includes: "+ theme(text = [...] )" in the code for the graphs should resolve this issue.
