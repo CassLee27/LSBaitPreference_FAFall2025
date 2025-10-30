@@ -162,7 +162,7 @@ Self-resetting traps
 ```{r}
 # subset to just traps single-baited with mayonnaise or peanut butter
 resetting_analysis_data <- subset(resetting, BaitType =="Mayo" | BaitType=="Peanut butter") |> 
-  mutate(Year = format(Date,"%Y"), Month = format(Date,"%m")
+  mutate(Year = format(Date,"%Y"), Month = format(Date,"%m"))
 ```
 
 ```{r}
