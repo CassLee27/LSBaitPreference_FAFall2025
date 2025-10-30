@@ -161,7 +161,8 @@ Self-resetting traps
 
 ```{r}
 # subset to just traps single-baited with mayonnaise or peanut butter
-resetting_analysis_data <- subset(resetting, BaitType =="Mayo" | BaitType=="Peanut butter")
+resetting_analysis_data <- subset(resetting, BaitType =="Mayo" | BaitType=="Peanut butter") |> 
+  mutate(Year = format(Date,"%Y"), Month = format(Date,"%m")
 ```
 
 ```{r}
@@ -173,7 +174,21 @@ tally(~BaitType, data=resetting_analysis_data)
 ```{r}
 # further examine which trap types catch multiple animals per record
 tally(TrapType~BaitType, data=resetting_analysis_data)
-tally(~TrapType,data=subset(resetting_analysis_data,Strikes>0))
+
+tally(~TrapType,data=subset(neat_data_r,(BaitType=="Mayo" | BaitType=="Peanut butter") & Strikes>1))
+  # in records where the trap was baited with only mayo or only pb, which trap types have more than one strike?
+tally(~TrapType,data=subset(neat_data_r,Strikes>1))
+  # for any bait, which trap types have more than one strike?
+```
+```{r}
+# look at all records with multiple strikes that aren't known self-resetting trap
+multiple_strikes <- subset(neat_data_r,Strikes>1 & TrapType!="AT220")
+multiple_strikes
+```
+
+```{r}
+# look at non-self-resetting records with multiple strikes baited with only mayo or pb
+multiple_strikes_mp <- subset(neat_data_r,(BaitType=="Mayo" | BaitType=="Peanut butter") & Strikes>1 & TrapType!="AT220")
 ```
 
 ```{r}
@@ -190,67 +205,32 @@ tally(~Strikes,data=subset(resetting_analysis_data,Strikes>0 &TrapType=="Supervi
 
 # TODO finish cleaning everything under this line
 
+Models predicting strike number for self-resetting traps only
+
 ```{r}
+# predict strikes by bait type (accounting for date)
 trapnz_model <- lmer(Strikes ~ BaitType + (1 | Date), data=resetting_analysis_data)
-resetting_analysis_data2 <- resetting_analysis_data |> mutate(Year = format(Date,"%Y"), Month = format(Date,"%m"))
-trapnz_model2 <- lmer(Strikes ~ BaitType + (1 | Year) + (1 | Month), data=resetting_analysis_data2)
-trapnz_model3 <- lmer(Strikes ~ BaitType + SpeciesCaught + (1 | Year) + (1 | Month), data=resetting_analysis_data2)
 
-resetting_rat <- resetting_analysis_data2 |> mutate(SprungByRat = Strikes>0 & grepl("Rat",SpeciesCaught))
-
-trapnz_model4 <- glmer(SprungByRat ~ BaitType + (1 | Year) + (1 | Month), family=binomial, data=resetting_rat)
-summary(trapnz_model4)
-```
-
-```{r}
-# stats for model
 summary(trapnz_model)
+```
+
+```{r}
+# predict strikes by bait type (accounting for year and month separately)
+  # year = general trend over time
+  # month = season
+trapnz_model2 <- lmer(Strikes ~ BaitType + (1 | Year) + (1 | Month), data=resetting_analysis_data)
+
 summary(trapnz_model2)
-summary(trapnz_model3)
-
-#model2 <- lm(Strikes ~ BaitType +Date, data=resetting_analysis_data)
-#summary(model2)
-  # p value for bait type is very low
-
 ```
 
-```{r}
-gf_boxplot(Strikes~"",fill=~BaitType,data=resetting_analysis_data)
-```
+Species caught for records with multiple strikes
 
 ```{r}
-# mutate to make a sprung or not binary variable
-sprung_analysis_data <- mutate(resetting_analysis_data, Sprung = Strikes>0)
-```
+# records with multiple strikes, sorted by strike number from greatest to least
+sorted_multiple_species <- subset(neat_data_r,Strikes>1) |>
+  arrange(desc(Strikes))
 
-```{r}
-
-sprung_rat_data <- mutate(resetting_analysis_data, Sprung = Strikes>0 & grepl("Rat",SpeciesCaught))
-
-#z.test()
-tally(~BaitType,data=sprung_rat_data)
-table(sprung_rat_data[,c("BaitType","Sprung")])
-
-#table(BaitType~Sprung,data=subset(sprung_analysis_data, SpeciesCaught=="None" | grepl("Rat",SpeciesCaught)))
-```
-
-```{r}
-gf_bar(~Sprung,fill=~BaitType,data=sprung_analysis_data)
-gf_bar(~BaitType,fill=~Sprung,data=sprung_analysis_data)
-
-gf_bar(~BaitType,position="fill",fill=~Sprung,data=sprung_rat_data) |> gf_labs(x = "Bait type", y = "Proportion of traps", fill="Sprung by rat") + scale_fill_manual(values=c("#F8766D","#00BFC4"), labels = c("False", "True")) + theme_classic()
-```
-
-```{r}
-tally(~SpeciesCaught, data=resetting_analysis_data)
-```
-
-```{r}
-# strikes over time
-# sprung by rats over time
-gf_histogram(~Date, fill=~BaitType,position="identity", data=sprung_rat_data)
-gf_histogram(~Date, fill=~Sprung, data=sprung_rat_data) |>
-  gf_labs(y="Trap count", fill="Sprung by rat") + facet_grid(BaitType~.,labeller=labeller("Mayonnaise", "Peanut butter")) + scale_fill_manual(values=c("#F8766D","#00BFC4"), labels = c("False", "True")) + theme_classic()
+sorted_multiple_species
 ```
 
 Check other single baits and combinations for sample size
